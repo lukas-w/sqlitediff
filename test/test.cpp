@@ -86,6 +86,8 @@ int main(int argc, char const *argv[])
 		F(strcmp((const char*) sqlite3_column_text(stmt, 2), "Orange"));
 
 		F(sqlite3_finalize(stmt));
+
+		return 0;
 	};
 
 	F(checkB("aux"));
