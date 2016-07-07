@@ -1,12 +1,15 @@
-cmake_minimum_required(VERSION 3.0)
-project(sqlitediff)
+cmake_minimum_required(VERSION 2.8.0)
+project(sqlitediff C CXX)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-add_library(${PROJECT_NAME} SHARED
-	diff
-	patch
-	sqliteint
+add_library(${PROJECT_NAME}
+	patch.cpp
+	patch.h
+	diff.c
+	diff.h
+	sqliteint.c
+	sqliteint.h
 )
 
 add_executable(sqlite-diff main-diff.cpp)
@@ -16,8 +19,8 @@ target_link_libraries(sqlitediff sqlite3)
 target_link_libraries(sqlite-diff sqlitediff)
 target_link_libraries(sqlite-patch sqlitediff)
 
-set_property(TARGET sqlitediff PROPERTY CXX_STANDARD 11)
-set_property(TARGET sqlite-diff PROPERTY CXX_STANDARD 11)
-set_property(TARGET sqlite-patch PROPERTY CXX_STANDARD 11)
+
+set_source_files_properties(patch.cpp patch.h main-diff.cpp main-patch.cpp
+                            PROPERTIES COMPILE_FLAGS -std=c++11)
 
 add_subdirectory(test)
