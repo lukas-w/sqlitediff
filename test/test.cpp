@@ -11,7 +11,6 @@
 	rc = X; 																\
 	if (rc != 0) {															\
 		std::cerr << "Error: " << #X << " returned " << rc << std::endl;	\
-		std::cerr << "SQL:" << sqlite3_errstr(rc) << std::endl;	\
 		return rc;															\
 	}																		\
 } while(0)

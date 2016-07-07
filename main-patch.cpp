@@ -32,11 +32,11 @@ int main(int argc, char const *argv[])
 
 	if (rc != SQLITE_OK) {
 		cerr << "Could not apply changeset " << patchFile << endl;
-		sqlite3_close_v2(db);
+		sqlite3_close(db);
 		return 2;	
 	}
 
-	sqlite3_close_v2(db);
+	sqlite3_close(db);
 
 	return 0;
 }
