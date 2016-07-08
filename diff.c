@@ -33,7 +33,6 @@
 */
 struct GlobalVars {
   int bSchemaOnly;          /* Only show schema differences */
-  int bSchemaPK;            /* Use the schema-defined PK, not the true PK */
   unsigned fDebug;          /* Debug flags */
   sqlite3 *db;              /* The database connection */
 } g;
@@ -381,7 +380,7 @@ static void changeset_one_table(const char *zTab, FILE *out){
   }
   strPrintf(&sql, ";\n");
 
-  if( 1 ){ 
+  if( g.fDebug ){ 
     printf("SQL for %s:\n%s\n", zId, sql.z);
     //goto end_changeset_one_table;
   }
@@ -463,16 +462,11 @@ end_changeset_one_table:
 int sqlitediff_diff_prepared(
   sqlite3 *db,
   const char* zTab, /* name of table to diff, or NULL for all tables */
-  int primarykey,   /* whether to use primary key instead of rowid */
   FILE* out     /* Output stream */
 ) {
   sqlite3_stmt *pStmt;
 
   g.db = db;
-
-  if(primarykey){
-    g.bSchemaPK = 1;
-  }
 
   if( zTab ){
     changeset_one_table(zTab, out);
@@ -493,7 +487,7 @@ int sqlitediff_diff_prepared(
   }
 }
 
-int sqlitediff_diff(const char* zDb1, const char* zDb2, const char* zTab, int primarykey, FILE* out){
+int sqlitediff_diff(const char* zDb1, const char* zDb2, const char* zTab, FILE* out){
   int i;
   int rc;
   char *zErrMsg = 0;
@@ -501,10 +495,7 @@ int sqlitediff_diff(const char* zDb1, const char* zDb2, const char* zTab, int pr
 
   sqlite3_config(SQLITE_CONFIG_SINGLETHREAD);
 
-  int debug = 2;
-  if(debug){
-	g.fDebug = debug;
-  }
+  g.fDebug = 0;
 
   rc = sqlite3_open(zDb1, &g.db);
   if( rc ){
@@ -525,7 +516,7 @@ int sqlitediff_diff(const char* zDb1, const char* zDb2, const char* zTab, int pr
     return runtimeError("\"%s\" does not appear to be a valid SQLite database", zDb2);
   }
 
-  sqlitediff_diff_prepared(g.db, zTab, primarykey, out);
+  sqlitediff_diff_prepared(g.db, zTab, out);
 
   /* TBD: Handle trigger differences */
   /* TBD: Handle view differences */
@@ -537,10 +528,9 @@ int sqlitediff_diff_file(
   const char* zDb1,
   const char* zDb2,
   const char* zTab,
-  int primarykey,
   const char* out
 ) {
   FILE* fp = fopen(out, "wb");
-  sqlitediff_diff(zDb1, zDb2, zTab, primarykey, fp);
+  sqlitediff_diff(zDb1, zDb2, zTab, fp);
   fclose(fp);
 }

@@ -97,7 +97,6 @@ int main(int argc, char const *argv[])
 	F(sqlitediff_diff_prepared(
 		db,
 		nullptr,
-		false,   /* whether to use primary key instead of rowid */
 		out      /* Output stream */
 	));
 	fclose(out);

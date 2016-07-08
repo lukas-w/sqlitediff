@@ -21,10 +21,9 @@ int main(int argc, char const *argv[])
 	sqlite3* db;
 	rc = sqlite3_open_v2(dbFile, &db, SQLITE_OPEN_READWRITE, nullptr);
 
-	sqlite3_trace(db, trace_callback, NULL);
-
 	if (rc != SQLITE_OK) {
-		cerr << "Could not open sqlite DB " << dbFile << endl;
+		cerr << "Could not open sqlite DB " << dbFile << ": " << sqlite3_errstr(rc) << endl;
+		sqlite3_close(db);
 		return 2;
 	}
 

@@ -122,7 +122,7 @@ int64_t bindValue(sqlite3_stmt* stmt, const sqlite_value& val, int col)
 		u32 blobLen;
 		u8 varIntLen = getVarint32((u8*)val.data, blobLen);
 
-		rc = sqlite3_bind_text(stmt, col, (char*)val.data + varIntLen, blobLen, nullptr);
+		rc = sqlite3_bind_blob(stmt, col, (char*)val.data + varIntLen, blobLen, nullptr);
 
 		size = blobLen + varIntLen;
 		break;
@@ -354,7 +354,7 @@ size_t applyUpdate(sqlite3* db, const char* tableName, u32 nCol, const char* buf
 	}
 }
 
-size_t applyInstruction(sqlite3* db, const char* tableName, u32 nCol, const char* buf)
+int64_t applyInstruction(sqlite3* db, const char* tableName, u32 nCol, const char* buf)
 {
 	size_t nRead = 0;
 
@@ -363,16 +363,18 @@ size_t applyInstruction(sqlite3* db, const char* tableName, u32 nCol, const char
 	buf++; nRead++;
 	buf++; nRead++;
 
+	size_t read;
+
 	switch(iType){
 	case SQLITE_INSERT:
-		nRead += applyInsert(db, tableName, nCol, buf);
+		read = applyInsert(db, tableName, nCol, buf);
 		break;
 	case SQLITE_DELETE: {
-		nRead += applyDelete(db, tableName, nCol, buf);
+		read = applyDelete(db, tableName, nCol, buf);
 		break;
 	}
 	case SQLITE_UPDATE: {
-		nRead += applyUpdate(db, tableName, nCol, buf);
+		read = applyUpdate(db, tableName, nCol, buf);
 		break;
 	}
 	default: {
@@ -381,7 +383,16 @@ size_t applyInstruction(sqlite3* db, const char* tableName, u32 nCol, const char
 	}
 	}
 
-	return nRead;
+	if (read == 0) {
+		std::cerr << "Error applying instruction!" << std::endl;
+		return -1;
+	}
+	if (sqlite3_changes(db) != 1) {
+		std::cerr << "Last applied instruction was not effectful! Aborting." << std::endl;
+		return -1;
+	}
+
+	return nRead + read;
 }
 
 int applyChangeset(sqlite3* db, const char* buf, size_t size)
@@ -425,6 +436,12 @@ int applyChangeset(sqlite3* db, const char* buf, size_t size)
 		size_t instrRead = 0;
 
 		while((instrRead = applyInstruction(db, tableName, nCol, buf))) {
+			if (instrRead < 0) {
+				std::cerr << "Error occured." << std::endl;
+				rc = sqlite3_exec(db, "PRAGMA defer_foreign_keys = 0", 0, 0, 0);
+				rc = sqlite3_exec(db, "ROLLBACK TO SAVEPOINT changeset_apply", 0, 0, 0);
+				return 10;
+			}
 			buf += instrRead;
 		}
 	}
