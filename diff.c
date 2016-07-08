@@ -480,11 +480,14 @@ int sqlitediff_diff_prepared(
       " WHERE type='table' AND sql NOT LIKE 'CREATE VIRTUAL%%'\n"
       " ORDER BY name"
     );
+
     while( SQLITE_ROW==sqlite3_step(pStmt) ){
       changeset_one_table((const char*)sqlite3_column_text(pStmt,0), out);
     }
     sqlite3_finalize(pStmt);
   }
+
+  return 0;
 }
 
 int sqlitediff_diff(const char* zDb1, const char* zDb2, const char* zTab, FILE* out){
@@ -516,12 +519,12 @@ int sqlitediff_diff(const char* zDb1, const char* zDb2, const char* zTab, FILE* 
     return runtimeError("\"%s\" does not appear to be a valid SQLite database", zDb2);
   }
 
-  sqlitediff_diff_prepared(g.db, zTab, out);
+  rc = sqlitediff_diff_prepared(g.db, zTab, out);
 
   /* TBD: Handle trigger differences */
   /* TBD: Handle view differences */
   sqlite3_close(g.db);
-  return 0;
+  return rc;
 }
 
 int sqlitediff_diff_file(
