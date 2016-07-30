@@ -25,8 +25,8 @@
 #include <string.h>
 #include <assert.h>
 
+#include "diff.h"
 #include "sqliteint.h"
-#include "sqlite3.h"
 
 /*
 ** All global variables are gathered into the "g" singleton.
@@ -74,14 +74,6 @@ static int runtimeError(const char *zFormat, ...){
   va_end(ap);
   fprintf(stderr, "\n");
   return 1;
-}
-
-/*
-** Free all memory held by a Str object
-*/
-static void strFree(Str *p){
-  sqlite3_free(p->z);
-  strInit(p);
 }
 
 /*
@@ -277,10 +269,64 @@ static void putValue(FILE *out, sqlite3_value *pVal){
   }
 }
 
+int writeTable(const struct TableInfo* table, void* context)
+{
+  FILE* out = (FILE*) context;
+  int nCol = table->nCol;
+  int* aiFlg = table->PKs;
+  const char* zTab = table->tableName;
+  int i;
+
+  putc('T', out);
+  putsVarint(out, (sqlite3_uint64)nCol);
+  for(i=0; i<nCol; i++) putc(aiFlg[i]!=0, out);
+    fwrite(zTab, 1, strlen(zTab), out);
+  putc(0, out);
+
+  return 0;
+}
+
+int writeInstruction(const struct Instruction* instr, void* context)
+{
+  int i;
+  FILE* out = (FILE*) context;
+  int iType = instr->iType;
+  int nCol = instr->table->nCol;
+
+  putc(iType, out);
+  putc(0, out);
+
+  switch( iType ){
+    case SQLITE_UPDATE: {
+     for(i=0; i<(nCol*2); i++){
+      if (instr->values[i]){
+        putValue(out, instr->values[i]);
+      }else{
+        putc(0, out);
+      }
+    }
+    break;
+  }
+    case SQLITE_INSERT:
+    case SQLITE_DELETE: {
+      for(i=0; i<nCol; i++){
+        if (instr->values[i]){
+          putValue(out, instr->values[i]);
+        }else{
+          putc(0, out);
+        }
+      }
+      break;
+    }
+  }
+
+  return 0;
+}
+
 /*
 ** Generate a CHANGESET for all differences from main.zTab to aux.zTab.
 */
-static void changeset_one_table(const char *zTab, FILE *out){
+static void changeset_one_table(const char *zTab, TableCallback tableCallback, InstrCallback instrCallback, void* context){
   sqlite3_stmt *pStmt;          /* SQL statment */
   char *zId = safeId(zTab);     /* Escaped name of the table */
   char **azCol = 0;             /* List of escaped column names */
@@ -323,7 +369,7 @@ static void changeset_one_table(const char *zTab, FILE *out){
         strPrintf(&sql, ",\n       A.%s", azCol[i]);
       }else{
         strPrintf(&sql, ",\n       A.%s IS NOT B.%s, A.%s, B.%s",
-                  azCol[i], azCol[i], azCol[i], azCol[i]);
+          azCol[i], azCol[i], azCol[i], azCol[i]);
       }
     }
     strPrintf(&sql,"\n  FROM main.%s A, aux.%s B\n", zId, zId);
@@ -385,40 +431,46 @@ static void changeset_one_table(const char *zTab, FILE *out){
     //goto end_changeset_one_table;
   }
 
-  putc('T', out);
-  putsVarint(out, (sqlite3_uint64)nCol);
-  for(i=0; i<nCol; i++) putc(aiFlg[i]!=0, out);
-  fwrite(zTab, 1, strlen(zTab), out);
-  putc(0, out);
+  struct TableInfo tableInfo;
+  tableInfo.PKs = aiFlg;
+  tableInfo.nCol = nCol;
+  tableInfo.tableName = zTab;
+
+  tableCallback(&tableInfo, context);
 
   pStmt = db_prepare("%s", sql.z);
+
+  struct Instruction instr;
+  instr.table = &tableInfo;
+  instr.values = malloc(sizeof(void*) * nCol * 2);
+
   while( SQLITE_ROW==sqlite3_step(pStmt) ){
     int iType = sqlite3_column_int(pStmt,0);
-    putc(iType, out);
-    putc(0, out);
+    instr.iType = iType;
+
     switch( sqlite3_column_int(pStmt,0) ){
       case SQLITE_UPDATE: {
         for(k=1, i=0; i<nCol; i++){
           if( aiFlg[i] ){
-            putValue(out, sqlite3_column_value(pStmt,k));
+            instr.values[i] = sqlite3_column_value(pStmt,k);
             k++;
           }else if( sqlite3_column_int(pStmt,k) ){
-            putValue(out, sqlite3_column_value(pStmt,k+1));
+            instr.values[i] = sqlite3_column_value(pStmt,k+1);
             k += 3;
           }else{
-            putc(0, out);
+            instr.values[i] = 0;
             k += 3;
           }
         }
         for(k=1, i=0; i<nCol; i++){
           if( aiFlg[i] ){
-            putc(0, out);
+            instr.values[nCol+i] = 0;
             k++;
           }else if( sqlite3_column_int(pStmt,k) ){
-            putValue(out, sqlite3_column_value(pStmt,k+2));
+            instr.values[nCol+i] = sqlite3_column_value(pStmt,k+2);
             k += 3;
           }else{
-            putc(0, out);
+            instr.values[nCol+i] = 0;
             k += 3;
           }
         }
@@ -427,10 +479,10 @@ static void changeset_one_table(const char *zTab, FILE *out){
       case SQLITE_INSERT: {
         for(k=1, i=0; i<nCol; i++){
           if( aiFlg[i] ){
-            putValue(out, sqlite3_column_value(pStmt,k));
+            instr.values[i] = sqlite3_column_value(pStmt,k);
             k++;
           }else{
-            putValue(out, sqlite3_column_value(pStmt,k+2));
+            instr.values[i] = sqlite3_column_value(pStmt,k+2);;
             k += 3;
           }
         }
@@ -439,20 +491,23 @@ static void changeset_one_table(const char *zTab, FILE *out){
       case SQLITE_DELETE: {
         for(k=1, i=0; i<nCol; i++){
           if( aiFlg[i] ){
-            putValue(out, sqlite3_column_value(pStmt,k));
+            instr.values[i] = sqlite3_column_value(pStmt,k);
             k++;
           }else{
-            putValue(out, sqlite3_column_value(pStmt,k+1));
+            instr.values[i] = sqlite3_column_value(pStmt,k+1);
             k += 3;
           }
         }
-        break;
+		break;
       }
     }
+	instrCallback(&instr, context);
   }
   sqlite3_finalize(pStmt);
-  
-end_changeset_one_table:
+
+  free(instr.values);
+
+  end_changeset_one_table:
   while( nCol>0 ) sqlite3_free(azCol[--nCol]);
   sqlite3_free(azCol);
   sqlite3_free(aiPk);
@@ -469,7 +524,7 @@ int sqlitediff_diff_prepared(
   g.db = db;
 
   if( zTab ){
-    changeset_one_table(zTab, out);
+    changeset_one_table(zTab, writeTable, writeInstruction, out);
   }else{
     /* Handle tables one by one */
     pStmt = db_prepare(
@@ -482,7 +537,7 @@ int sqlitediff_diff_prepared(
     );
 
     while( SQLITE_ROW==sqlite3_step(pStmt) ){
-      changeset_one_table((const char*)sqlite3_column_text(pStmt,0), out);
+      changeset_one_table((const char*)sqlite3_column_text(pStmt,0), writeTable, writeInstruction, out);
     }
     sqlite3_finalize(pStmt);
   }
@@ -491,7 +546,6 @@ int sqlitediff_diff_prepared(
 }
 
 int sqlitediff_diff(const char* zDb1, const char* zDb2, const char* zTab, FILE* out){
-  int i;
   int rc;
   char *zErrMsg = 0;
   char *zSql;
@@ -534,6 +588,7 @@ int sqlitediff_diff_file(
   const char* out
 ) {
   FILE* fp = fopen(out, "wb");
-  sqlitediff_diff(zDb1, zDb2, zTab, fp);
+  int rc = sqlitediff_diff(zDb1, zDb2, zTab, fp);
   fclose(fp);
+  return rc;
 }
