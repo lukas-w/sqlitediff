@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 2.8.0)
 project(sqlitediff C CXX)
 
+add_definitions(-Wall)
+
 add_library(${PROJECT_NAME} SHARED
 	patch.cpp
 	patch.h

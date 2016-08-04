@@ -54,6 +54,9 @@ int main(int argc, char const *argv[])
 	F(sqlite3_exec(db, 
 		"INSERT INTO main.Entries VALUES (1, 'Banane', 'Gälb')",
 		nullptr, nullptr, nullptr));
+	F(sqlite3_exec(db,
+		"INSERT INTO main.Entries VALUES (3, 'Dattel', 'Rot')",
+		nullptr, nullptr, nullptr));
 
 
 	F(sqlite3_exec(db,

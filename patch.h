@@ -3,7 +3,7 @@
 #include "diff.h"
 #include "sqlite3.h"
 
-int applyInstruction(sqlite3* db, struct Instruction* instr);
+int applyInstruction(const Instruction* instr, sqlite3* db);
 
 int readChangeset(
 		const char* buf,

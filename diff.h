@@ -8,26 +8,40 @@ extern "C" {
 #include <stdio.h>
 #include "sqlite3.h"
 
+struct sqlite_value
+{
+	int16_t type;
+	union {
+		int64_t iVal;
+		double dVal;
+	} data1;
+	char* data2; //< Used for BLOB and TEXT
+};
+
 struct TableInfo {
   const char* tableName;
   uint8_t nCol;
   int* PKs;
+  const char** columnNames;
 };
 
 struct Instruction {
   struct TableInfo* table;
   uint8_t iType;
-  sqlite3_value** values;
+  struct sqlite_value* values;
 };
 
 typedef int (*InstrCallback)(const struct Instruction* instr, void* context);
 typedef int (*TableCallback)(const struct TableInfo* table, void* context);
 
+int sqlitediff_write_table(const struct TableInfo* table, void* context);
+int sqlitediff_write_instruction(const struct Instruction* instr, void* context);
+
 int slitediff_diff_prepared_callback(
   sqlite3 *db,
   const char* zTab,
-  TableCallback* table_callback,
-  InstrCallback* instr_callback,
+  TableCallback table_callback,
+  InstrCallback instr_callback,
   void* context
 );
 
@@ -51,6 +65,8 @@ int sqlitediff_diff_file(
   const char* zTab,
   const char* out
 );
+
+static void putsVarint(FILE *out, sqlite3_uint64 v);
 
 #ifdef __cplusplus
 } // end extern "C"

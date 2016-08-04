@@ -26,7 +26,6 @@
 #include <assert.h>
 
 #include "diff.h"
-#include "sqliteint.h"
 
 /*
 ** All global variables are gathered into the "g" singleton.
@@ -235,8 +234,8 @@ static void putsVarint(FILE *out, sqlite3_uint64 v){
 /*
 ** Write an SQLite value onto out.
 */
-static void putValue(FILE *out, sqlite3_value *pVal){
-  int iDType = sqlite3_value_type(pVal);
+static void putValue(FILE *out, struct sqlite_value *pVal){
+  int iDType = pVal->type;
   sqlite3_int64 iX;
   double rX;
   sqlite3_uint64 uX;
@@ -245,31 +244,55 @@ static void putValue(FILE *out, sqlite3_value *pVal){
   putc(iDType, out);
   switch( iDType ){
     case SQLITE_INTEGER:
-      iX = sqlite3_value_int64(pVal);
+      iX = pVal->data1.iVal;
       memcpy(&uX, &iX, 8);
       for(j=56; j>=0; j-=8) putc((uX>>j)&0xff, out);
       break;
     case SQLITE_FLOAT:
-      rX = sqlite3_value_double(pVal);
+      rX = pVal->data1.dVal;
       memcpy(&uX, &rX, 8);
       for(j=56; j>=0; j-=8) putc((uX>>j)&0xff, out);
       break;
     case SQLITE_TEXT:
-      iX = sqlite3_value_bytes(pVal);
+      iX = pVal->data1.iVal;
       putsVarint(out, (sqlite3_uint64)iX);
-      fwrite(sqlite3_value_text(pVal),1,(size_t)iX,out);
+      fwrite(pVal->data2,1,(size_t)iX,out);
       break;
     case SQLITE_BLOB:
-      iX = sqlite3_value_bytes(pVal);
+      iX = pVal->data1.iVal;
       putsVarint(out, (sqlite3_uint64)iX);
-      fwrite(sqlite3_value_blob(pVal),1,(size_t)iX,out);
+      fwrite(pVal->data2,1,(size_t)iX,out);
       break;
     case SQLITE_NULL:
       break;
   }
 }
 
-int writeTable(const struct TableInfo* table, void* context)
+void sqlite3_value_to_sqlite_value(sqlite3_value* src, struct sqlite_value* dst) {
+  int iDType = sqlite3_value_type(src);
+  dst->type = iDType;
+
+  switch( iDType ){
+  case SQLITE_INTEGER:
+    dst->data1.iVal = sqlite3_value_int64(src);
+    break;
+  case SQLITE_FLOAT:
+    dst->data1.dVal = sqlite3_value_double(src);
+    break;
+  case SQLITE_TEXT:
+    dst->data1.iVal = sqlite3_value_bytes(src);
+    dst->data2 = sqlite3_value_text(src);
+    break;
+  case SQLITE_BLOB:
+    dst->data1.iVal = sqlite3_value_bytes(src);
+    dst->data2 = sqlite3_value_blob(src);
+    break;
+  case SQLITE_NULL:
+    break;
+  }
+}
+
+int sqlitediff_write_table(const struct TableInfo* table, void* context)
 {
   FILE* out = (FILE*) context;
   int nCol = table->nCol;
@@ -286,7 +309,7 @@ int writeTable(const struct TableInfo* table, void* context)
   return 0;
 }
 
-int writeInstruction(const struct Instruction* instr, void* context)
+int sqlitediff_write_instruction(const struct Instruction* instr, void* context)
 {
   int i;
   FILE* out = (FILE*) context;
@@ -299,8 +322,8 @@ int writeInstruction(const struct Instruction* instr, void* context)
   switch( iType ){
     case SQLITE_UPDATE: {
      for(i=0; i<(nCol*2); i++){
-      if (instr->values[i]){
-        putValue(out, instr->values[i]);
+      if (instr->values[i].type){
+      putValue(out, &instr->values[i]);
       }else{
         putc(0, out);
       }
@@ -310,8 +333,8 @@ int writeInstruction(const struct Instruction* instr, void* context)
     case SQLITE_INSERT:
     case SQLITE_DELETE: {
       for(i=0; i<nCol; i++){
-        if (instr->values[i]){
-          putValue(out, instr->values[i]);
+        if (instr->values[i].type){
+          putValue(out, &instr->values[i]);
         }else{
           putc(0, out);
         }
@@ -322,6 +345,7 @@ int writeInstruction(const struct Instruction* instr, void* context)
 
   return 0;
 }
+
 
 /*
 ** Generate a CHANGESET for all differences from main.zTab to aux.zTab.
@@ -435,6 +459,7 @@ static void changeset_one_table(const char *zTab, TableCallback tableCallback, I
   tableInfo.PKs = aiFlg;
   tableInfo.nCol = nCol;
   tableInfo.tableName = zTab;
+  tableInfo.columnNames = azCol;
 
   tableCallback(&tableInfo, context);
 
@@ -442,7 +467,7 @@ static void changeset_one_table(const char *zTab, TableCallback tableCallback, I
 
   struct Instruction instr;
   instr.table = &tableInfo;
-  instr.values = malloc(sizeof(void*) * nCol * 2);
+  instr.values = malloc(sizeof(struct sqlite_value) * nCol * 2);
 
   while( SQLITE_ROW==sqlite3_step(pStmt) ){
     int iType = sqlite3_column_int(pStmt,0);
@@ -452,25 +477,25 @@ static void changeset_one_table(const char *zTab, TableCallback tableCallback, I
       case SQLITE_UPDATE: {
         for(k=1, i=0; i<nCol; i++){
           if( aiFlg[i] ){
-            instr.values[i] = sqlite3_column_value(pStmt,k);
+            sqlite3_value_to_sqlite_value(sqlite3_column_value(pStmt,k), &instr.values[i]);
             k++;
           }else if( sqlite3_column_int(pStmt,k) ){
-            instr.values[i] = sqlite3_column_value(pStmt,k+1);
+            sqlite3_value_to_sqlite_value(sqlite3_column_value(pStmt,k+1), &instr.values[i]);
             k += 3;
           }else{
-            instr.values[i] = 0;
+            instr.values[i].type = 0;
             k += 3;
           }
         }
         for(k=1, i=0; i<nCol; i++){
           if( aiFlg[i] ){
-            instr.values[nCol+i] = 0;
+            instr.values[nCol+i].type = 0;
             k++;
           }else if( sqlite3_column_int(pStmt,k) ){
-            instr.values[nCol+i] = sqlite3_column_value(pStmt,k+2);
+            sqlite3_value_to_sqlite_value(sqlite3_column_value(pStmt,k+2), &instr.values[nCol+i]);
             k += 3;
           }else{
-            instr.values[nCol+i] = 0;
+            instr.values[nCol+i].type = 0;
             k += 3;
           }
         }
@@ -479,10 +504,10 @@ static void changeset_one_table(const char *zTab, TableCallback tableCallback, I
       case SQLITE_INSERT: {
         for(k=1, i=0; i<nCol; i++){
           if( aiFlg[i] ){
-            instr.values[i] = sqlite3_column_value(pStmt,k);
+            sqlite3_value_to_sqlite_value(sqlite3_column_value(pStmt,k), &instr.values[i]);
             k++;
           }else{
-            instr.values[i] = sqlite3_column_value(pStmt,k+2);;
+            sqlite3_value_to_sqlite_value(sqlite3_column_value(pStmt,k+2), &instr.values[i]);
             k += 3;
           }
         }
@@ -491,17 +516,17 @@ static void changeset_one_table(const char *zTab, TableCallback tableCallback, I
       case SQLITE_DELETE: {
         for(k=1, i=0; i<nCol; i++){
           if( aiFlg[i] ){
-            instr.values[i] = sqlite3_column_value(pStmt,k);
+            sqlite3_value_to_sqlite_value(sqlite3_column_value(pStmt,k), &instr.values[i]);
             k++;
           }else{
-            instr.values[i] = sqlite3_column_value(pStmt,k+1);
+            sqlite3_value_to_sqlite_value(sqlite3_column_value(pStmt,k+1), &instr.values[i]);
             k += 3;
           }
         }
-		break;
+        break;
       }
     }
-	instrCallback(&instr, context);
+    instrCallback(&instr, context);
   }
   sqlite3_finalize(pStmt);
 
@@ -514,6 +539,34 @@ static void changeset_one_table(const char *zTab, TableCallback tableCallback, I
   sqlite3_free(zId);
 }
 
+int slitediff_diff_prepared_callback(sqlite3* db, const char* zTab, TableCallback table_callback, InstrCallback instr_callback, void* context)
+{
+	sqlite3_stmt *pStmt;
+
+	g.db = db;
+
+	if( zTab ){
+	  changeset_one_table(zTab, table_callback, instr_callback, context);
+	}else{
+	  /* Handle tables one by one */
+	  pStmt = db_prepare(
+		"SELECT name FROM main.sqlite_master\n"
+		" WHERE type='table' AND sql NOT LIKE 'CREATE VIRTUAL%%'\n"
+		" UNION\n"
+		"SELECT name FROM aux.sqlite_master\n"
+		" WHERE type='table' AND sql NOT LIKE 'CREATE VIRTUAL%%'\n"
+		" ORDER BY name"
+	  );
+
+	  while( SQLITE_ROW==sqlite3_step(pStmt) ){
+		changeset_one_table((const char*)sqlite3_column_text(pStmt,0), table_callback, instr_callback, context);
+	  }
+	  sqlite3_finalize(pStmt);
+	}
+
+	return 0;
+}
+
 int sqlitediff_diff_prepared(
   sqlite3 *db,
   const char* zTab, /* name of table to diff, or NULL for all tables */
@@ -524,7 +577,7 @@ int sqlitediff_diff_prepared(
   g.db = db;
 
   if( zTab ){
-    changeset_one_table(zTab, writeTable, writeInstruction, out);
+	changeset_one_table(zTab, sqlitediff_write_table, sqlitediff_write_instruction, out);
   }else{
     /* Handle tables one by one */
     pStmt = db_prepare(
@@ -537,7 +590,7 @@ int sqlitediff_diff_prepared(
     );
 
     while( SQLITE_ROW==sqlite3_step(pStmt) ){
-      changeset_one_table((const char*)sqlite3_column_text(pStmt,0), writeTable, writeInstruction, out);
+	  changeset_one_table((const char*)sqlite3_column_text(pStmt,0), sqlitediff_write_table, sqlitediff_write_instruction, out);
     }
     sqlite3_finalize(pStmt);
   }

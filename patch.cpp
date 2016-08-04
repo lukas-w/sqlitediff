@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
+#include <numeric>
 #include <string>
 #include <iostream>
 #include <fstream>
@@ -62,22 +63,8 @@ Value:
 
 */
 
-struct sqlite_value
+size_t readValue(const char* buf, sqlite_value* val)
 {
-	u8 type;
-	union {
-		int64_t iVal;
-		double dVal;
-	} data1;
-	char* data2; //< Used for BLOB and TEXT
-};
-
-size_t readValue(const char* buf, sqlite_value** val_p)
-{
-	*val_p = nullptr;
-
-	sqlite_value* val = new sqlite_value;
-
 	u8 type = buf[0];
 	val->type = type;
 	buf++;
@@ -122,15 +109,12 @@ size_t readValue(const char* buf, sqlite_value** val_p)
 	case SQLITE_NULL:
 		break;
 	case 0:
-		delete val;
-		val = nullptr;
+		val->type = 0;
 		break;
 	default:
-		delete val;
+		val->type = -1;
 		return 0;
 	}
-
-	*val_p = val;
 
 	return read;
 }
@@ -139,10 +123,6 @@ void freeInstructionValues(Instruction* instr) {
 	int nCol = instr->table->nCol;
 	if (instr->iType == SQLITE_UPDATE) {
 		nCol *= 2;
-	}
-
-	for (int i=0; i < nCol; i++) {
-		delete (sqlite_value*) instr->values[i];
 	}
 }
 
@@ -163,9 +143,9 @@ int bindValue(sqlite3_stmt* stmt, int col, const sqlite_value* val) {
 	}
 }
 
-int bindValues(sqlite3_stmt* stmt, sqlite_value** values, uint8_t nCol) {
+int bindValues(sqlite3_stmt* stmt, sqlite_value* values, uint8_t nCol) {
 	for (int i=0; i < nCol; i++) {
-		int rc = bindValue(stmt, i+1, values[i]);
+		int rc = bindValue(stmt, i+1, &values[i]);
 		if (rc != SQLITE_OK) {
 			return rc;
 		}
@@ -199,7 +179,7 @@ int applyInsert(sqlite3* db, const Instruction* instr)
 	}
 
 
-	rc = bindValues(stmt, (sqlite_value**)instr->values, nCol);
+	rc = bindValues(stmt, instr->values, nCol);
 	if (rc != SQLITE_OK) {
 		return rc;
 	}
@@ -220,7 +200,8 @@ std::vector<std::string> getColumnNames(sqlite3* db, const char* tableName)
 	std::vector<std::string> result; int rc;
 
 	sqlite3_stmt* stmt;
-	rc = sqlite3_prepare_v2(db, (std::string() + "pragma table_info ('" + tableName +"')").data(), -1, &stmt, nullptr);
+	std::string sql = std::string() + "pragma table_info(" + tableName +");";
+	rc = sqlite3_prepare_v2(db, sql.data(), -1, &stmt, nullptr);
 	if (rc!=SQLITE_OK) {
 		return result;
 	}
@@ -241,15 +222,20 @@ int applyDelete(sqlite3* db, const Instruction* instr)
 	int rc;
 
 	auto columnNames = getColumnNames(db, instr->table->tableName);
-	std::string sql = std::string() + "DELETE FROM " + instr->table->tableName + " WHERE";
+	std::string sql = std::string() + "DELETE FROM " + instr->table->tableName + " WHERE ";
 
 	uint8_t nCol = instr->table->nCol;
-	for (int i=0; i < nCol; i++) {
-		if (i > 0) {
-			sql += " AND";
+
+	std::vector<std::string> wheres;
+	for (int i=0; i < nCol; i++)
+	{
+		if (instr->values[i].type) {
+			wheres.push_back(columnNames.at(i) + " = ?");
 		}
-		sql = sql + " " + columnNames.at(i) + " = ?";
 	}
+	sql += std::accumulate(wheres.cbegin()+1, wheres.cend(), wheres.at(0), [&columnNames](const std::string&a, const std::string& b) {
+		return a + " AND " + b;
+	});
 
 	sqlite3_stmt* stmt;
 	rc = sqlite3_prepare_v2(db, sql.data(), sql.size(), &stmt, nullptr);
@@ -259,7 +245,7 @@ int applyDelete(sqlite3* db, const Instruction* instr)
 		return rc;
 	}
 
-	rc = bindValues(stmt, (sqlite_value**)instr->values, nCol);
+	rc = bindValues(stmt, instr->values, nCol);
 	if (rc != SQLITE_OK) {
 		std::cerr << "Failed binding to DELETE statement " << sql << std::endl;
 		return rc;
@@ -279,8 +265,8 @@ int applyUpdate(sqlite3* db, const Instruction* instr)
 {
 	int nCol = instr->table->nCol;
 
-	sqlite_value** valsBefore = (sqlite_value**) instr->values;
-	sqlite_value** valsAfter = (sqlite_value**) instr->values + nCol;
+	sqlite_value* valsBefore = instr->values;
+	sqlite_value* valsAfter = instr->values + nCol;
 
 	std::vector<std::string> columnNames = getColumnNames(db, instr->table->tableName);
 
@@ -291,7 +277,7 @@ int applyUpdate(sqlite3* db, const Instruction* instr)
 	for (int n=0, i=0; i < nCol; i++) {
 		const auto& name = columnNames.at(i);
 		const auto val = valsAfter[i];
-		if (val) {
+		if (val.type) {
 			if (n > 0) {
 				sql += ", ";
 			}
@@ -305,7 +291,7 @@ int applyUpdate(sqlite3* db, const Instruction* instr)
 	for (int n=0, i=0; i < nCol; i++) {
 		const auto& name = columnNames.at(i);
 		const auto val = valsBefore[i];
-		if (val) {
+		if (val.type) {
 			if (n > 0) {
 				sql += " AND";
 			}
@@ -323,8 +309,8 @@ int applyUpdate(sqlite3* db, const Instruction* instr)
 
 	int n = 1;
 	for (int i=0; i < nCol; i++) {
-		sqlite_value* val = valsAfter[i];
-		if (val) {
+		sqlite_value* val = &valsAfter[i];
+		if (val->type) {
 			if (bindValue(stmt, n, val)) {
 				return 1;
 			}
@@ -333,8 +319,8 @@ int applyUpdate(sqlite3* db, const Instruction* instr)
 	}
 
 	for (int i=0; i < nCol; i++) {
-		sqlite_value* val = valsBefore[i];
-		if (val) {
+		sqlite_value* val = &valsBefore[i];
+		if (val->type) {
 			if (bindValue(stmt, n, val)) {
 				return 1;
 			}
@@ -373,6 +359,7 @@ int applyInstructionCallback(const Instruction* instr, void* context)
 	return applyInstruction(instr, (sqlite3*)context);
 }
 
+
 size_t readInstructionFromBuffer(const char* buf, Instruction* instr)
 {
 	size_t nRead = 0;
@@ -385,10 +372,8 @@ size_t readInstructionFromBuffer(const char* buf, Instruction* instr)
 		nCol *= 2;
 	}
 
-
-
 	for (int i=0; i < nCol; i++) {
-		sqlite_value** val_p = (sqlite_value**) instr->values + i;
+		sqlite_value* val_p = instr->values + i;
 		size_t read = readValue(buf, val_p);
 		if (read == 0) {
 			return 0;
@@ -399,8 +384,6 @@ size_t readInstructionFromBuffer(const char* buf, Instruction* instr)
 
 	return nRead;
 }
-
-
 
 
 int applyChangeset(sqlite3* db, const char* buf, size_t size)
@@ -445,6 +428,7 @@ int applyChangeset(sqlite3* db, const char* filename)
 	return applyChangeset(db, buffer.data(), size);
 }
 
+
 int readChangeset(const char* buf, size_t size, InstrCallback instr_callback, void* context)
 {
 	const char* const bufEnd = buf + size;
@@ -484,9 +468,10 @@ int readChangeset(const char* buf, size_t size, InstrCallback instr_callback, vo
 
 		Instruction instr;
 		instr.table = &table;
-		instr.values = new sqlite3_value*[nCol*2];
+		instr.values = new sqlite_value[nCol*2];
 
-		while (buf < bufEnd && (instrRead = readInstructionFromBuffer(buf, &instr))) {
+		while (buf < bufEnd && buf[0] != 'T') {
+			instrRead = readInstructionFromBuffer(buf, &instr);
 			if (instrRead == 0) {
 				std::cerr << "Error reading instruction from buffer." << std::endl;
 				freeInstructionValues(&instr);
