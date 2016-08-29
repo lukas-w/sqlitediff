@@ -322,8 +322,8 @@ int sqlitediff_write_instruction(const struct Instruction* instr, void* context)
   switch( iType ){
     case SQLITE_UPDATE: {
      for(i=0; i<(nCol*2); i++){
-      if (instr->values[i].type){
-      putValue(out, &instr->values[i]);
+      if (instr->valFlag[i % nCol]){
+        putValue(out, &instr->values[i]);
       }else{
         putc(0, out);
       }
@@ -461,13 +461,16 @@ static void changeset_one_table(const char *zTab, TableCallback tableCallback, I
   tableInfo.tableName = zTab;
   tableInfo.columnNames = azCol;
 
-  tableCallback(&tableInfo, context);
+  if (tableCallback) {
+    tableCallback(&tableInfo, context);
+  }
 
   pStmt = db_prepare("%s", sql.z);
 
   struct Instruction instr;
   instr.table = &tableInfo;
   instr.values = malloc(sizeof(struct sqlite_value) * nCol * 2);
+  instr.valFlag = malloc(sizeof(int) * nCol);
 
   while( SQLITE_ROW==sqlite3_step(pStmt) ){
     int iType = sqlite3_column_int(pStmt,0);
@@ -478,24 +481,15 @@ static void changeset_one_table(const char *zTab, TableCallback tableCallback, I
         for(k=1, i=0; i<nCol; i++){
           if( aiFlg[i] ){
             sqlite3_value_to_sqlite_value(sqlite3_column_value(pStmt,k), &instr.values[i]);
+            instr.values[nCol+i].type = 0;
             k++;
-          }else if( sqlite3_column_int(pStmt,k) ){
+          }else{
+            // write old value
             sqlite3_value_to_sqlite_value(sqlite3_column_value(pStmt,k+1), &instr.values[i]);
-            k += 3;
-          }else{
-            instr.values[i].type = 0;
-            k += 3;
-          }
-        }
-        for(k=1, i=0; i<nCol; i++){
-          if( aiFlg[i] ){
-            instr.values[nCol+i].type = 0;
-            k++;
-          }else if( sqlite3_column_int(pStmt,k) ){
+            // write new value
             sqlite3_value_to_sqlite_value(sqlite3_column_value(pStmt,k+2), &instr.values[nCol+i]);
-            k += 3;
-          }else{
-            instr.values[nCol+i].type = 0;
+            // write changed flag
+            instr.valFlag[i] = sqlite3_column_int(pStmt,k);
             k += 3;
           }
         }
@@ -531,6 +525,7 @@ static void changeset_one_table(const char *zTab, TableCallback tableCallback, I
   sqlite3_finalize(pStmt);
 
   free(instr.values);
+  free(instr.valFlag);
 
   end_changeset_one_table:
   while( nCol>0 ) sqlite3_free(azCol[--nCol]);
@@ -541,30 +536,30 @@ static void changeset_one_table(const char *zTab, TableCallback tableCallback, I
 
 int slitediff_diff_prepared_callback(sqlite3* db, const char* zTab, TableCallback table_callback, InstrCallback instr_callback, void* context)
 {
-	sqlite3_stmt *pStmt;
+  sqlite3_stmt *pStmt;
 
-	g.db = db;
+  g.db = db;
 
-	if( zTab ){
-	  changeset_one_table(zTab, table_callback, instr_callback, context);
-	}else{
-	  /* Handle tables one by one */
-	  pStmt = db_prepare(
-		"SELECT name FROM main.sqlite_master\n"
-		" WHERE type='table' AND sql NOT LIKE 'CREATE VIRTUAL%%'\n"
-		" UNION\n"
-		"SELECT name FROM aux.sqlite_master\n"
-		" WHERE type='table' AND sql NOT LIKE 'CREATE VIRTUAL%%'\n"
-		" ORDER BY name"
-	  );
+  if( zTab ){
+    changeset_one_table(zTab, table_callback, instr_callback, context);
+  }else{
+    /* Handle tables one by one */
+    pStmt = db_prepare(
+      "SELECT name FROM main.sqlite_master\n"
+      " WHERE type='table' AND sql NOT LIKE 'CREATE VIRTUAL%%'\n"
+      " UNION\n"
+      "SELECT name FROM aux.sqlite_master\n"
+      " WHERE type='table' AND sql NOT LIKE 'CREATE VIRTUAL%%'\n"
+      " ORDER BY name"
+      );
 
-	  while( SQLITE_ROW==sqlite3_step(pStmt) ){
-		changeset_one_table((const char*)sqlite3_column_text(pStmt,0), table_callback, instr_callback, context);
-	  }
-	  sqlite3_finalize(pStmt);
-	}
+    while( SQLITE_ROW==sqlite3_step(pStmt) ){
+      changeset_one_table((const char*)sqlite3_column_text(pStmt,0), table_callback, instr_callback, context);
+    }
+    sqlite3_finalize(pStmt);
+  }
 
-	return 0;
+  return 0;
 }
 
 int sqlitediff_diff_prepared(
@@ -577,7 +572,7 @@ int sqlitediff_diff_prepared(
   g.db = db;
 
   if( zTab ){
-	changeset_one_table(zTab, sqlitediff_write_table, sqlitediff_write_instruction, out);
+    changeset_one_table(zTab, sqlitediff_write_table, sqlitediff_write_instruction, out);
   }else{
     /* Handle tables one by one */
     pStmt = db_prepare(
@@ -590,7 +585,7 @@ int sqlitediff_diff_prepared(
     );
 
     while( SQLITE_ROW==sqlite3_step(pStmt) ){
-	  changeset_one_table((const char*)sqlite3_column_text(pStmt,0), sqlitediff_write_table, sqlitediff_write_instruction, out);
+      changeset_one_table((const char*)sqlite3_column_text(pStmt,0), sqlitediff_write_table, sqlitediff_write_instruction, out);
     }
     sqlite3_finalize(pStmt);
   }

@@ -10,12 +10,12 @@ extern "C" {
 
 struct sqlite_value
 {
-	int16_t type;
-	union {
-		int64_t iVal;
-		double dVal;
-	} data1;
-	char* data2; //< Used for BLOB and TEXT
+  int16_t type;
+  union {
+    int64_t iVal;
+    double dVal;
+  } data1;
+  const char* data2; //< Used for BLOB and TEXT
 };
 
 struct TableInfo {
@@ -28,7 +28,8 @@ struct TableInfo {
 struct Instruction {
   struct TableInfo* table;
   uint8_t iType;
-  struct sqlite_value* values;
+  struct sqlite_value* values; //< Array of values, old and new concatenated in UDPATE
+  int* valFlag; //< For UPDATE instrs, array of flags indicating whether the value has changed
 };
 
 typedef int (*InstrCallback)(const struct Instruction* instr, void* context);
@@ -65,8 +66,6 @@ int sqlitediff_diff_file(
   const char* zTab,
   const char* out
 );
-
-static void putsVarint(FILE *out, sqlite3_uint64 v);
 
 #ifdef __cplusplus
 } // end extern "C"

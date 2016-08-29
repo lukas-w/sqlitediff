@@ -11,6 +11,8 @@
 #include <fstream>
 #include <vector>
 
+#include <chrono>
+
 #include "patch.h"
 
 #define CHANGESET_CORRUPT 1
@@ -119,13 +121,6 @@ size_t readValue(const char* buf, sqlite_value* val)
 	return read;
 }
 
-void freeInstructionValues(Instruction* instr) {
-	int nCol = instr->table->nCol;
-	if (instr->iType == SQLITE_UPDATE) {
-		nCol *= 2;
-	}
-}
-
 int bindValue(sqlite3_stmt* stmt, int col, const sqlite_value* val) {
 	switch(val->type) {
 	case SQLITE_INTEGER:
@@ -227,10 +222,12 @@ int applyDelete(sqlite3* db, const Instruction* instr)
 	uint8_t nCol = instr->table->nCol;
 
 	std::vector<std::string> wheres;
+	std::vector<sqlite_value> whereValues;
 	for (int i=0; i < nCol; i++)
 	{
 		if (instr->values[i].type) {
 			wheres.push_back(columnNames.at(i) + " = ?");
+			whereValues.push_back(instr->values[i]);
 		}
 	}
 	sql += std::accumulate(wheres.cbegin()+1, wheres.cend(), wheres.at(0), [&columnNames](const std::string&a, const std::string& b) {
@@ -245,7 +242,7 @@ int applyDelete(sqlite3* db, const Instruction* instr)
 		return rc;
 	}
 
-	rc = bindValues(stmt, instr->values, nCol);
+	rc = bindValues(stmt, whereValues.data(), whereValues.size());
 	if (rc != SQLITE_OK) {
 		std::cerr << "Failed binding to DELETE statement " << sql << std::endl;
 		return rc;
@@ -431,7 +428,11 @@ int applyChangeset(sqlite3* db, const char* filename)
 
 int readChangeset(const char* buf, size_t size, InstrCallback instr_callback, void* context)
 {
+	const char* const bufStart = buf;
 	const char* const bufEnd = buf + size;
+
+	double lastPos = .0;
+	auto t1 = std::chrono::high_resolution_clock::now();
 
 	while(buf < bufEnd) {
 		char op = buf[0];
@@ -470,11 +471,11 @@ int readChangeset(const char* buf, size_t size, InstrCallback instr_callback, vo
 		instr.table = &table;
 		instr.values = new sqlite_value[nCol*2];
 
+
 		while (buf < bufEnd && buf[0] != 'T') {
 			instrRead = readInstructionFromBuffer(buf, &instr);
 			if (instrRead == 0) {
 				std::cerr << "Error reading instruction from buffer." << std::endl;
-				freeInstructionValues(&instr);
 				delete[] instr.values;
 				return CHANGESET_INSTRUCTION_CORRUPT;
 			}
@@ -482,14 +483,19 @@ int readChangeset(const char* buf, size_t size, InstrCallback instr_callback, vo
 			int rc;
 			if (instr_callback && (rc = instr_callback(&instr, context))) {
 				std::cerr << "Error applying instruction. Callback returned " << rc << std::endl;
-				freeInstructionValues(&instr);
 				delete[] instr.values;
 				return CHANGESET_CALLBACK_ERROR;
 			}
 
-			freeInstructionValues(&instr);
-
 			buf += instrRead;
+
+			double pos = (double)(buf - bufStart) / (bufEnd - bufStart) * 100;
+			if ((pos - lastPos) > 0.1) {
+				auto t2 = std::chrono::high_resolution_clock::now();
+				auto time_span = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
+				std::cerr << pos << "%, " << (time_span.count() / pos) * 100 << std::endl;
+				lastPos = pos;
+			}
 		}
 
 		delete[] instr.values;
