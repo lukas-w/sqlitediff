@@ -96,7 +96,7 @@ int main(int argc, char const *argv[])
 	F(checkB("aux"));
 
 	// Diff
-	FILE* out = fopen("out.diff", "w");
+	FILE* out = fopen("out.diff", "wb");
 	F(sqlitediff_diff_prepared(
 		db,
 		nullptr,
