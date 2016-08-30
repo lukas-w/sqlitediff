@@ -322,7 +322,7 @@ int sqlitediff_write_instruction(const struct Instruction* instr, void* context)
   switch( iType ){
     case SQLITE_UPDATE: {
      for(i=0; i<(nCol*2); i++){
-      if (instr->valFlag[i % nCol]){
+      if (instr->valFlag[i % nCol] || (i < nCol && instr->table->PKs[i])){
         putValue(out, &instr->values[i]);
       }else{
         putc(0, out);
