@@ -350,7 +350,7 @@ int sqlitediff_write_instruction(const struct Instruction* instr, void* context)
 /*
 ** Generate a CHANGESET for all differences from main.zTab to aux.zTab.
 */
-static void changeset_one_table(const char *zTab, TableCallback tableCallback, InstrCallback instrCallback, void* context){
+static int changeset_one_table(const char *zTab, TableCallback tableCallback, InstrCallback instrCallback, void* context){
   sqlite3_stmt *pStmt;          /* SQL statment */
   char *zId = safeId(zTab);     /* Escaped name of the table */
   char **azCol = 0;             /* List of escaped column names */
@@ -361,6 +361,7 @@ static void changeset_one_table(const char *zTab, TableCallback tableCallback, I
   Str sql;                      /* SQL for the diff query */
   int i, k;                     /* Loop counters */
   const char *zSep;             /* List separator */
+  int rc = SQLITE_OK;
 
   /* Check that the schemas of the two tables match. Exit early otherwise. */
   checkSchemasMatch(zTab);
@@ -462,7 +463,7 @@ static void changeset_one_table(const char *zTab, TableCallback tableCallback, I
   tableInfo.columnNames = azCol;
 
   if (tableCallback) {
-    tableCallback(&tableInfo, context);
+    rc = tableCallback(&tableInfo, context);
   }
 
   pStmt = db_prepare("%s", sql.z);
@@ -472,7 +473,7 @@ static void changeset_one_table(const char *zTab, TableCallback tableCallback, I
   instr.values = malloc(sizeof(struct sqlite_value) * nCol * 2);
   instr.valFlag = malloc(sizeof(int) * nCol);
 
-  while( SQLITE_ROW==sqlite3_step(pStmt) ){
+  while( rc == SQLITE_OK && SQLITE_ROW==sqlite3_step(pStmt) ){
     int iType = sqlite3_column_int(pStmt,0);
     instr.iType = iType;
 
@@ -521,7 +522,7 @@ static void changeset_one_table(const char *zTab, TableCallback tableCallback, I
         break;
       }
     }
-    instrCallback(&instr, context);
+    rc = instrCallback(&instr, context);
   }
   sqlite3_finalize(pStmt);
 
@@ -533,10 +534,13 @@ static void changeset_one_table(const char *zTab, TableCallback tableCallback, I
   sqlite3_free(azCol);
   sqlite3_free(aiPk);
   sqlite3_free(zId);
+
+  return rc;
 }
 
 int slitediff_diff_prepared_callback(sqlite3* db, const char* zTab, TableCallback table_callback, InstrCallback instr_callback, void* context)
 {
+  int rc = SQLITE_OK;
   sqlite3_stmt *pStmt;
 
   g.db = db;
@@ -554,13 +558,13 @@ int slitediff_diff_prepared_callback(sqlite3* db, const char* zTab, TableCallbac
       " ORDER BY name"
       );
 
-    while( SQLITE_ROW==sqlite3_step(pStmt) ){
-      changeset_one_table((const char*)sqlite3_column_text(pStmt,0), table_callback, instr_callback, context);
+    while( rc == SQLITE_OK && SQLITE_ROW==sqlite3_step(pStmt) ){
+      rc = changeset_one_table((const char*)sqlite3_column_text(pStmt,0), table_callback, instr_callback, context);
     }
     sqlite3_finalize(pStmt);
   }
 
-  return 0;
+  return rc;
 }
 
 int sqlitediff_diff_prepared(
@@ -568,30 +572,7 @@ int sqlitediff_diff_prepared(
   const char* zTab, /* name of table to diff, or NULL for all tables */
   FILE* out     /* Output stream */
 ) {
-  sqlite3_stmt *pStmt;
-
-  g.db = db;
-
-  if( zTab ){
-    changeset_one_table(zTab, sqlitediff_write_table, sqlitediff_write_instruction, out);
-  }else{
-    /* Handle tables one by one */
-    pStmt = db_prepare(
-      "SELECT name FROM main.sqlite_master\n"
-      " WHERE type='table' AND sql NOT LIKE 'CREATE VIRTUAL%%'\n"
-      " UNION\n"
-      "SELECT name FROM aux.sqlite_master\n"
-      " WHERE type='table' AND sql NOT LIKE 'CREATE VIRTUAL%%'\n"
-      " ORDER BY name"
-    );
-
-    while( SQLITE_ROW==sqlite3_step(pStmt) ){
-      changeset_one_table((const char*)sqlite3_column_text(pStmt,0), sqlitediff_write_table, sqlitediff_write_instruction, out);
-    }
-    sqlite3_finalize(pStmt);
-  }
-
-  return 0;
+  return slitediff_diff_prepared_callback(db, zTab, sqlitediff_write_table, sqlitediff_write_instruction, out);
 }
 
 int sqlitediff_diff(const char* zDb1, const char* zDb2, const char* zTab, FILE* out){
