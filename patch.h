@@ -3,6 +3,11 @@
 #include "diff.h"
 #include "sqlite3.h"
 
+#include <vector>
+#include <string>
+
+std::vector<std::string> getColumnNames(sqlite3* db, const char* tableName);
+
 int applyInstruction(const Instruction* instr, sqlite3* db);
 
 int readChangeset(

@@ -301,6 +301,7 @@ int applyUpdate(sqlite3* db, const Instruction* instr)
 	rc = sqlite3_prepare_v2(db, sql.data(), sql.size(), &stmt, nullptr);
 
 	if (rc != SQLITE_OK) {
+		std::cerr << "applyUpdate: Failed preparing sql " << sql << std::endl;
 		return 1;
 	}
 
