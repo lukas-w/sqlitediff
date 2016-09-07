@@ -481,6 +481,7 @@ static void changeset_one_table(const char *zTab, TableCallback tableCallback, I
         for(k=1, i=0; i<nCol; i++){
           if( aiFlg[i] ){
             sqlite3_value_to_sqlite_value(sqlite3_column_value(pStmt,k), &instr.values[i]);
+            instr.valFlag[i] = 0;
             instr.values[nCol+i].type = 0;
             k++;
           }else{
