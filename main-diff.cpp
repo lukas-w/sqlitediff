@@ -19,11 +19,12 @@ void trace_callback(void* udp, const char* sql) {
 	}																		\
 } while(0)
 
+const char* usage = "Usage: sqlite-diff [db1] [db2]";
 
 int main(int argc, char const *argv[])
 {
 	if (argc != 3) {
-		cerr << "Wrong number of arguments" << endl;
+        cerr << "Wrong number of arguments" << endl << usage << endl;
 		return 1;
 	}
 

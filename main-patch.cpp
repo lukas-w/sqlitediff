@@ -7,10 +7,12 @@ using namespace std;
 
 void trace_callback( void* udp, const char* sql ) { printf("{SQL} [%s]\n", sql); }
 
+const char* usage = "Usage: sqlite-patch [db] [patchfile]";
+
 int main(int argc, char const *argv[])
 {
 	if (argc != 3) {
-		cerr << "Wrong number of arguments" << endl;
+        cerr << "Wrong number of arguments" << endl << usage << endl;
 		return 1;
 	}
 
